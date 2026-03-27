@@ -129,8 +129,11 @@ async def on_message(message: discord.Message) -> None:
     if message.author.id in bot_ids:
         return
 
-    # Only act in the configured channel
-    if message.channel.id != config.TARGET_CHANNEL_ID:
+    # Only act in the configured channel (or threads that belong to it)
+    if isinstance(message.channel, discord.Thread):
+        if message.channel.parent_id != config.TARGET_CHANNEL_ID:
+            return
+    elif message.channel.id != config.TARGET_CHANNEL_ID:
         return
 
     # ── Determine whether this is a new round or a continuation ──────────────
