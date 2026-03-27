@@ -70,6 +70,41 @@ BOT_MAP: dict[str, discord.Client] = {
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
+async def rebuild_context_from_discord(thread: discord.Thread) -> ctx.ThreadContext:
+    """
+    Reconstruct a ThreadContext by reading the actual Discord thread history.
+    Called when the in-memory context is missing (e.g. after a Railway restart).
+    """
+    bot_ids = {b.user.id: name for name, b in BOT_MAP.items() if b.user}
+
+    original_message = ""
+    thread_ctx = None
+
+    async for msg in thread.history(limit=100, oldest_first=True):
+        if msg.author.id in bot_ids:
+            # Bot message — identify the agent by author ID
+            agent_name = bot_ids[msg.author.id]
+            agent = AGENTS[agent_name]
+            # Strip the bold header line we prepend (e.g. "**Blue — Thinker**\n")
+            text = msg.content
+            if text.startswith("**") and "\n" in text:
+                text = text.split("\n", 1)[1].strip()
+            if thread_ctx is not None:
+                thread_ctx.add_response(agent.DISPLAY_NAME, text)
+        else:
+            # User message
+            if thread_ctx is None:
+                # First user message = the original prompt
+                original_message = msg.content
+                thread_ctx = ctx.get_or_create(thread.id, original_message)
+            else:
+                thread_ctx.add_response("User", msg.content)
+
+    if thread_ctx is None:
+        thread_ctx = ctx.get_or_create(thread.id, "")
+
+    return thread_ctx
+
 async def post_as(agent_name: str, thread_id: int, text: str) -> None:
     """Send text in a thread using the bot assigned to agent_name.
 
@@ -165,12 +200,12 @@ async def on_message(message: discord.Message) -> None:
         # Continuation: user replied inside an existing thread
         thread = message.channel
         thread_ctx = ctx.get(thread_id)
-        if thread_ctx is None:
-            # Orphaned thread — start fresh
-            thread_ctx = ctx.get_or_create(thread_id, message.content)
-        else:
-            # Update with the new user message so agents see it
-            thread_ctx.add_response("User", message.content)
+        if thread_ctx is None or thread_ctx.is_empty():
+            # Context missing or stale (e.g. after a Railway restart) —
+            # rebuild from the actual Discord thread history
+            thread_ctx = await rebuild_context_from_discord(thread)
+        # Add the new user message so agents see it
+        thread_ctx.add_response("User", message.content)
     else:
         # New round: create a thread from the user's message
         thread = await message.create_thread(
