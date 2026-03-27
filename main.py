@@ -31,6 +31,7 @@ from agents.empathist import Empathist
 from agents.pessimist import Pessimist
 from agents.wildcard  import WildCard
 from agents.leader    import Leader
+from agents.alpha     import Alpha
 
 # ── agent instances ──────────────────────────────────────────────────────────
 
@@ -41,6 +42,7 @@ AGENTS = {
     "Pessimist": Pessimist(),
     "Wild Card": WildCard(),
     "Leader":    Leader(),
+    "Alpha":     Alpha(),
 }
 
 # ── Discord client per bot ────────────────────────────────────────────────────
@@ -54,6 +56,7 @@ empathist_bot = discord.Client(intents=intents)
 pessimist_bot = discord.Client(intents=intents)
 wildcard_bot  = discord.Client(intents=intents)
 leader_bot    = discord.Client(intents=intents)   # primary listener
+alpha_bot     = discord.Client(intents=intents)
 
 BOT_MAP: dict[str, discord.Client] = {
     "Thinker":   thinker_bot,
@@ -62,6 +65,7 @@ BOT_MAP: dict[str, discord.Client] = {
     "Pessimist": pessimist_bot,
     "Wild Card": wildcard_bot,
     "Leader":    leader_bot,
+    "Alpha":     alpha_bot,
 }
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -88,6 +92,22 @@ async def post_as(agent_name: str, thread_id: int, text: str) -> None:
     for chunk in chunks:
         await channel.send(chunk)
         await asyncio.sleep(0.5)
+
+
+async def run_alpha(thread_id: int, thread_ctx: ctx.ThreadContext, user_instruction: str) -> None:
+    """
+    Run Alpha alone — skip all Rangers. Alpha reads the full thread and
+    executes the user's specific instruction.
+    """
+    agent = AGENTS["Alpha"]
+    thread_summary = thread_ctx.build_thread_summary()
+
+    response_text = await asyncio.get_event_loop().run_in_executor(
+        None, agent.respond, thread_summary, user_instruction
+    )
+
+    thread_ctx.add_response(agent.DISPLAY_NAME, response_text)
+    await post_as("Alpha", thread_id, response_text)
 
 
 async def run_round(
@@ -159,7 +179,18 @@ async def on_message(message: discord.Message) -> None:
         )
         thread_ctx = ctx.get_or_create(thread.id, message.content)
 
-    # ── Route ─────────────────────────────────────────────────────────────────
+    # ── Check for @Alpha mention — bypasses Rangers entirely ──────────────────
+
+    alpha_mentioned = (
+        alpha_bot.user is not None
+        and any(u.id == alpha_bot.user.id for u in message.mentions)
+    )
+
+    if alpha_mentioned:
+        await run_alpha(thread.id, thread_ctx, message.content)
+        return
+
+    # ── Route to Rangers ──────────────────────────────────────────────────────
 
     full_thread = thread_ctx.build_thread_summary()
     agent_names = await asyncio.get_event_loop().run_in_executor(
@@ -181,6 +212,7 @@ async def main() -> None:
         pessimist_bot.start(config.DISCORD_TOKEN_PESSIMIST),
         wildcard_bot.start(config.DISCORD_TOKEN_WILDCARD),
         leader_bot.start(config.DISCORD_TOKEN_LEADER),
+        alpha_bot.start(config.DISCORD_TOKEN_ALPHA),
     )
 
 
